@@ -1,0 +1,60 @@
+library(readxl)
+# *** ALL ORIGINAL COLUMN NAMES WILL BE KEPT *** 
+cancer <- read.csv(<cleaned_cancer file path>)
+
+# Merge with air quality data, roughly 60% of the county level information is missing 
+aqi <- read.csv(<aqi file path>)
+aqi$Non.Good.Day.Ratio <- 1 - (aqi$Good.Days / aqi$Days.with.AQI)
+
+# Lots of counties missing, average metrics by state is one option
+# I just change the names of some of the columns to make merging easier
+aqi_data <- aqi[c('Non.Good.Day.Ratio', 'Max.AQI', 'Median.AQI', 'State')]
+state_level_aqi_data <- aggregate(aqi_data[,1:3], list(aqi_data$State), mean)
+names(state_level_aqi_data)[1] <- "State"
+names(state_level_aqi_data)[2] <- paste(names(state_level_aqi_data)[2], "StateLevel", sep=".")
+names(state_level_aqi_data)[3] <- paste(names(state_level_aqi_data)[3], "StateLevel", sep=".")
+names(state_level_aqi_data)[4] <- paste(names(state_level_aqi_data)[4], "StateLevel", sep=".")
+
+# Multiply the ratio by 100, since all the other percetnages are 100
+state_level_aqi_data$Non.Good.Day.Ratio.StateLevel <- state_level_aqi_data$Non.Good.Day.Ratio.StateLevel * 100
+
+
+# Option 2, try to impute 60% missing AQI metrics at a county level, use joined data as predictors on the missing amount
+
+aqi$Geography <- paste(aqi$County, aqi_data$State, sep = " County, ")
+aqi_data <- aqi[c('Non.Good.Day.Ratio','Max.AQI', 'Median.AQI','County')]
+county_level_aqi_cancer <- merge(cancer, aqi_data, by="County", all.x = TRUE)
+ 
+# *** DON'T RUN THIS IT WILL TAKE A LONG TIME, I have the file ***
+imputed_data <- mice(county_level_aqi_cancer, m=60, maxit=40, meth = 'pmm', remove_collinear = FALSE)
+
+county_level_aqi_cancer <- complete(imputed_data, 1)
+names(county_level_aqi_cancer)[38] <-  paste(names(county_level_aqi_cancer)[38], "CountyLevelImputed", sep=".")
+names(county_level_aqi_cancer)[39] <-  paste(names(county_level_aqi_cancer)[39], "CountyLevelImputed", sep=".")
+names(county_level_aqi_cancer)[40] <-  paste(names(county_level_aqi_cancer)[40], "CountyLevelImputed", sep=".")
+
+# Multiply the ratio by 100, since all the other percetnages are 100
+county_level_aqi_cancer$Non.Good.Day.Ratio.CountyLevelImputed <- county_level_aqi_cancer$Non.Good.Day.Ratio.CountyLevelImputed * 100
+
+# Merge county level and state level dataframes
+
+all_cancer_features <- merge(county_level_aqi_cancer, state_level_aqi_data, by = 'State', all.x = TRUE)
+write.csv(all_cancer_features, "all_cancer_features.csv", row.names = FALSE)
+
+
+# *** For only including dummy variables in the model, just run part below ***
+
+# R's regression formula will treat categorical variables as indicator variables, aka will use each category as a predictor complete with statistics
+# I'll make dummy variables here seperately in case anyone wants to remove specific states/only include specific states in the final model
+# However, if you make all the dummy variables, fit a regression on them, you will get multicollinearity since we will have all states present
+# Just do the initial fit using the "State" category, look at p-values, think about what/if you want to include anything
+# Then generate the dummy variables below, and merge into the main data horizontally (instructions below)
+
+cancer_data <- read.csv(<path for cancer data>)
+cancer_states_dummy <- data.frame()
+for (state in unique(cancer_data$State)) {
+  cancer_states_dummy[1:nrow(cancer_data),state] <- ifelse(cancer_data$State == state, 1, 0)
+}
+
+# Then, whatever state dummy variable you want to include, just do something like this new_data <- cbind(cancer_data, cancer_states_dummy[c("Alabama", "Idaho", "Kentucky)])
+# Replace with your state(s) of choice of course
